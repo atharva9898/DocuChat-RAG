@@ -1,0 +1,10 @@
+langchain==0.3.25
+langchain_community==0.3.24
+python-dotenv==1.1.0
+streamlit==1.37.1
+pypdf
+unstructured
+python-docx
+faiss-cpu
+sentence-transformers
+ctransformers
