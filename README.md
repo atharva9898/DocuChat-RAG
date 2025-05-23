@@ -6,6 +6,9 @@ This project implements a Retrieval Augmented Generation (RAG) application using
 
 This project was developed as part of an internship task, focusing on demonstrating a clear understanding of the RAG pipeline and its components.
 
+![image](https://github.com/user-attachments/assets/1013250a-746b-4e2f-b1e1-5ced52935683)
+
+
 ## Features
 
 * **Multi-document Upload:** Supports uploading multiple PDF, DOCX, and TXT files.
