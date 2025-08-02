@@ -10,6 +10,9 @@ from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.llms import CTransformers 
 from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_community.llms import HuggingFaceHub
 
 # Load environment variables from .env file (not strictly needed for local LLM, but good practice)
 load_dotenv()
@@ -24,6 +27,14 @@ LOCAL_LLM_MODEL_PATH = "mistral-7b-instruct-v0.2.Q4_K_M.gguf" # Make sure this f
 # Define the HuggingFace embedding model to use (still local)
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
+# API Configuration
+SUPPORTED_APIS = {
+    "Local Model": "local",
+    "OpenAI GPT": "openai", 
+    "Anthropic Claude": "anthropic",
+    "Hugging Face Hub": "huggingface"
+}
+
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="📄 Chat with Your Documents using RAG", layout="centered")
 st.title("📄 Chat with Your Documents using RAG")
@@ -36,8 +47,54 @@ uploaded_files = st.sidebar.file_uploader(
     key="file_uploader"
 )
 
+# API Selection
+st.sidebar.header("2. Choose LLM Provider")
+selected_api = st.sidebar.selectbox(
+    "Select your preferred LLM:",
+    list(SUPPORTED_APIS.keys()),
+    key="api_selection"
+)
+
+# API Configuration based on selection
+api_key = None
+model_name = None
+
+if SUPPORTED_APIS[selected_api] == "openai":
+    api_key = st.sidebar.text_input(
+        "OpenAI API Key:",
+        type="password",
+        help="Enter your OpenAI API key"
+    )
+    model_name = st.sidebar.selectbox(
+        "OpenAI Model:",
+        ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"],
+        key="openai_model"
+    )
+elif SUPPORTED_APIS[selected_api] == "anthropic":
+    api_key = st.sidebar.text_input(
+        "Anthropic API Key:",
+        type="password", 
+        help="Enter your Anthropic API key"
+    )
+    model_name = st.sidebar.selectbox(
+        "Anthropic Model:",
+        ["claude-3-haiku-20240307", "claude-3-sonnet-20240229", "claude-3-opus-20240229"],
+        key="anthropic_model"
+    )
+elif SUPPORTED_APIS[selected_api] == "huggingface":
+    api_key = st.sidebar.text_input(
+        "Hugging Face API Token:",
+        type="password",
+        help="Enter your Hugging Face API token"
+    )
+    model_name = st.sidebar.text_input(
+        "Model Repository:",
+        value="microsoft/DialoGPT-medium",
+        help="Enter the Hugging Face model repository (e.g., microsoft/DialoGPT-medium)"
+    )
+
 # Button to trigger document processing
-process_button = st.sidebar.button("2. Process Documents", key="process_button")
+process_button = st.sidebar.button("3. Process Documents", key="process_button")
 
 # --- Functions for RAG Pipeline ---
 
@@ -108,23 +165,86 @@ def get_vector_store(text_chunks):
         vector_store = FAISS.from_documents(text_chunks, embeddings)
     return vector_store
 
-def get_qa_chain(vector_store):
+def get_llm_instance(api_type, api_key=None, model_name=None):
     """
-    Initializes the LLM (CTransformers for local model) and creates the RetrievalQA chain.
-    Includes a custom prompt template for better RAG performance.
+    Creates and returns an LLM instance based on the selected API type.
     """
-    if not os.path.exists(LOCAL_LLM_MODEL_PATH):
-        st.error(f"Local LLM model file not found: {LOCAL_LLM_MODEL_PATH}")
-        st.markdown("Please download the model from [https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/blob/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf](https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/blob/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf) and place it in the same directory as your script.")
+    if api_type == "local":
+        if not os.path.exists(LOCAL_LLM_MODEL_PATH):
+            st.error(f"Local LLM model file not found: {LOCAL_LLM_MODEL_PATH}")
+            st.markdown("Please download the model from [https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/blob/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf](https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/blob/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf) and place it in the same directory as your script.")
+            return None
+        
+        with st.spinner(f"Loading local LLM model: {LOCAL_LLM_MODEL_PATH}... (This may take a while the first time)"):
+            llm = CTransformers(
+                model=LOCAL_LLM_MODEL_PATH,
+                model_type="mistral",
+                config={'max_new_tokens': 512, 'temperature': 0.7}
+            )
+        return llm
+    
+    elif api_type == "openai":
+        if not api_key:
+            st.error("Please provide your OpenAI API key.")
+            return None
+        
+        try:
+            llm = ChatOpenAI(
+                api_key=api_key,
+                model_name=model_name or "gpt-3.5-turbo",
+                temperature=0.7,
+                max_tokens=512
+            )
+            return llm
+        except Exception as e:
+            st.error(f"Error initializing OpenAI: {e}")
+            return None
+    
+    elif api_type == "anthropic":
+        if not api_key:
+            st.error("Please provide your Anthropic API key.")
+            return None
+        
+        try:
+            llm = ChatAnthropic(
+                api_key=api_key,
+                model=model_name or "claude-3-haiku-20240307",
+                temperature=0.7,
+                max_tokens=512
+            )
+            return llm
+        except Exception as e:
+            st.error(f"Error initializing Anthropic: {e}")
+            return None
+    
+    elif api_type == "huggingface":
+        if not api_key:
+            st.error("Please provide your Hugging Face API token.")
+            return None
+        
+        try:
+            llm = HuggingFaceHub(
+                huggingfacehub_api_token=api_key,
+                repo_id=model_name or "microsoft/DialoGPT-medium",
+                model_kwargs={"temperature": 0.7, "max_length": 512}
+            )
+            return llm
+        except Exception as e:
+            st.error(f"Error initializing Hugging Face Hub: {e}")
+            return None
+    
+    else:
+        st.error(f"Unsupported API type: {api_type}")
         return None
 
-    with st.spinner(f"Loading local LLM model: {LOCAL_LLM_MODEL_PATH}... (This may take a while the first time)"):
-        # Initialize CTransformers LLM for a local GGUF model
-        llm = CTransformers(
-            model=LOCAL_LLM_MODEL_PATH,
-            model_type="mistral", # Specify the model type (e.g., "llama", "mistral", "gpt2")
-            config={'max_new_tokens': 512, 'temperature': 0.7} # Adjust parameters as needed
-        )
+def get_qa_chain(vector_store, api_type, api_key=None, model_name=None):
+    """
+    Initializes the LLM based on selected API and creates the RetrievalQA chain.
+    Includes a custom prompt template for better RAG performance.
+    """
+    llm = get_llm_instance(api_type, api_key, model_name)
+    if not llm:
+        return None
 
     # Define a custom prompt template for the RAG chain
     prompt_template = """
@@ -168,11 +288,51 @@ if "messages" not in st.session_state:
 
 # Process documents when the button is clicked
 if process_button and uploaded_files:
+    # Check if API key is required and provided
+    api_type = SUPPORTED_APIS[selected_api]
+    if api_type != "local" and not api_key:
+        st.sidebar.error(f"Please provide your {selected_api} API key before processing.")
+    else:
+        with st.spinner("Processing documents and creating knowledge base..."):
+            st.session_state.document_chunks = get_document_chunks(uploaded_files)
+            if st.session_state.document_chunks:
+                st.session_state.vector_store = get_vector_store(st.session_state.document_chunks)
+                st.session_state.qa_chain = get_qa_chain(
+                    st.session_state.vector_store, 
+                    api_type, 
+                    api_key, 
+                    model_name
+                )
+                if st.session_state.qa_chain:
+                    st.sidebar.success(f"Successfully processed {len(st.session_state.document_chunks)} chunks using {selected_api}.")
+                    st.sidebar.info("You can now ask questions in the chat interface.")
+                else:
+                    st.sidebar.error(f"Failed to initialize {selected_api}. Please check your configuration.")
+                    st.session_state.vector_store = None
+                    st.session_state.qa_chain = None
+            else:
+                st.sidebar.warning("No valid documents were processed.")
+                st.session_state.vector_store = None
+                st.session_state.qa_chain = None
+elif process_button and not uploaded_files:
+    st.sidebar.warning("Please upload documents first before processing.")
+
+# Reset processing if API selection changes
+if "previous_api" not in st.session_state:
+    st.session_state.previous_api = selected_api
+elif st.session_state.previous_api != selected_api:
+    st.session_state.previous_api = selected_api
+    st.session_state.qa_chain = None
+    st.sidebar.info("API selection changed. Please process documents again.")
+
+# Legacy processing code (remove this block)
+"""
+if process_button and uploaded_files:
     with st.spinner("Processing documents and creating knowledge base..."):
         st.session_state.document_chunks = get_document_chunks(uploaded_files)
         if st.session_state.document_chunks:
             st.session_state.vector_store = get_vector_store(st.session_state.document_chunks)
-            st.session_state.qa_chain = get_qa_chain(st.session_state.vector_store)
+            st.session_state.qa_chain = get_qa_chain(st.session_state.vector_store, "local")
             if st.session_state.qa_chain: # Check if QA chain was successfully created (model loaded)
                 st.sidebar.success(f"Successfully processed {len(st.session_state.document_chunks)} chunks and loaded LLM.")
                 st.sidebar.info("You can now ask questions in the chat interface.")
@@ -186,6 +346,7 @@ if process_button and uploaded_files:
             st.session_state.qa_chain = None
 elif process_button and not uploaded_files:
     st.sidebar.warning("Please upload documents first before processing.")
+"""
 
 # Display chat messages from history on app rerun
 for message in st.session_state.messages:
